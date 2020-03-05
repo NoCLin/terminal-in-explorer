@@ -11,7 +11,11 @@ import win32con
 import win32gui
 from pywinauto.application import Application
 
-logging.basicConfig(level=logging.DEBUG, filename="debug.log", filemode="a")
+
+def get_executable_dir():
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(__file__)
 
 
 # TODO: logging
@@ -227,6 +231,8 @@ def main():
                 if cur_path:
                     # DONE: check for terminal IDLE
                     if is_terminal_idle(shell_app.process):
+                        # FIXED: 需要中断当前输入
+                        shell_app["ConsoleWindowClass"].type_keys('^c', pause=0)
                         # cmd need cd /D
                         shell_app["ConsoleWindowClass"].type_keys(
                             '{ENTER}cd /D "%s"{ENTER}' % cur_path, pause=0, with_spaces=True)
@@ -255,9 +261,13 @@ def main():
 
         logging.error(e)
         logging.error(traceback.format_exc())
+        # win32api.MessageBox(0, str(e), "Error", )
 
 
 if __name__ == "__main__":
+    log_file = os.path.join(get_executable_dir(), "debug.log")
+    logging.basicConfig(level=logging.DEBUG, filename=log_file, filemode="a")
+
     if len(sys.argv) > 1 and sys.argv[1] == "register":
         import register
 
