@@ -2,7 +2,9 @@ import logging
 import os
 import sys
 import time
+import traceback
 
+import pywintypes
 import win32api
 import win32com.client
 import win32con
@@ -13,6 +15,9 @@ logging.basicConfig(level=logging.DEBUG, filename="debug.log", filemode="a")
 
 
 # TODO: logging
+# pyinstaller 打包，以便锁定在任务栏快速启动
+# 保持后台运行(只需首次启动，加速)，并自动吸附在在任意一个资源管理器(不需要每一个窗口都打开一次)。
+# 配置项 (终端类型、窗口大小、方向)
 
 
 def is_terminal_idle(pid):
@@ -25,7 +30,7 @@ def is_terminal_idle(pid):
     return len([1 for child in children if child.Name != "conhost.exe"]) == 0
 
 
-# TODO: 模仿 conemu set parent
+# TODO: 模仿 conemu set parent?
 
 def hide_titlebar_and_taskbar(hwnd):
     style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
@@ -60,7 +65,7 @@ def main():
 
     try:
         logging.debug("started")
-        # 脚本显示窗口时 暂时先切换回explorer
+
         explorer_hwnd = win32gui.GetForegroundWindow()
         logging.debug("explorer_hwnd: %d" % explorer_hwnd)
         logging.debug("explorer_title: %s" % win32gui.GetWindowText(explorer_hwnd))
@@ -86,8 +91,7 @@ def main():
             print("Find ShellTabWindowClass failed.")
             exit(-1)
 
-        # TODO: 效率
-        # TODO: 适配其他系统？
+        # TODO: 适配其他系统？(win8 / win7)
 
         path1 = ["WorkerW", "ReBarWindow32",
                  "Address Band Root", "msctls_progress32",
@@ -107,7 +111,6 @@ def main():
         print("explorer_address_hwnd", explorer_address_hwnd)
 
         # TODO: 适配 cmd.exe powershell.exe WindowsTerminal.exe wsl
-        #
 
         terminal_launcher_command = "cmd /k "
 
@@ -115,7 +118,6 @@ def main():
 
         def get_explorer_address():
 
-            # TODO: parse 我的电脑 文档 等
             # 去除前缀
             address = " ".join(win32gui.GetWindowText(explorer_address_hwnd).split(" ")[1:])
 
@@ -206,6 +208,8 @@ def main():
             # explorer_and_shell 失去焦点就取消 topmost
             z_order = win32con.HWND_TOPMOST if is_fore else win32con.HWND_NOTOPMOST
             flags = win32con.SWP_SHOWWINDOW if is_fore else win32con.SWP_HIDEWINDOW
+            # FIXME: 有时快速拖拽explorer到边缘区域 会导致终端无法显示
+
             # x,y,cx,cy
             win32gui.SetWindowPos(shell_hwnd, z_order,
                                   shell_left, shell_top,
@@ -233,8 +237,6 @@ def main():
 
             last_path = cur_path
 
-            # logging.info(title)
-
         while True:
             time.sleep(0.2)
             check_update()
@@ -247,12 +249,11 @@ def main():
             shell_app.kill()
         except:
             pass
-        import pywintypes
+
         if isinstance(e, pywintypes.error):
             print("window closed.", e)
 
         logging.error(e)
-        import traceback
         logging.error(traceback.format_exc())
 
 
