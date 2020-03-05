@@ -229,7 +229,7 @@ def main():
                     if is_terminal_idle(shell_app.process):
                         # cmd need cd /D
                         shell_app["ConsoleWindowClass"].type_keys(
-                            '{ENTER}cd "%s"{ENTER}' % cur_path, pause=0, with_spaces=True)
+                            '{ENTER}cd /D "%s"{ENTER}' % cur_path, pause=0, with_spaces=True)
                     else:
                         logging.debug("Terminal Busy.")
                 else:
