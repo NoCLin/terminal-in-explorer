@@ -46,15 +46,16 @@ def delete_sub_key(key0, current_key, arch_key=0):
     return
 
 
-def main():
+def main(is_register):
     # request_admin()
-    choice = None
-    while choice not in ["Y", "N"]:
-        choice = input("Input Y for register, N for unregister, Q for exit.").strip().upper()
-        if choice == "Q":
-            exit()
+    if is_register is None:
+        choice = None
+        while choice not in ["Y", "N"]:
+            choice = input("Input Y for register, N for unregister, Q for exit.").strip().upper()
+            if choice == "Q":
+                exit()
 
-    is_register = choice == "Y"
+        is_register = choice == "Y"
 
     try:
         background_shell = r"Software\Classes\Directory\Background\shell"
@@ -89,4 +90,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    main(None)

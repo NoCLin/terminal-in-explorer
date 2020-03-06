@@ -173,7 +173,8 @@ def run():
 
 
     except ExplorerGone:
-        win32api.MessageBox(0, "Explorer Bye", "", win32con.MB_TOPMOST | win32con.MB_SYSTEMMODAL)
+        pass
+        # win32api.MessageBox(0, "Explorer Bye", "", win32con.MB_TOPMOST | win32con.MB_SYSTEMMODAL)
     except TerminalGone:
         # 终端挂了 恢复explorer位置
         # SetWindowPos不能处理最大化情况
@@ -183,7 +184,7 @@ def run():
         height = bottom - top
         # 补回高度
         win32gui.MoveWindow(existed_widget_hwnd, 0, 0, width, height + terminal_height, 1)
-        win32api.MessageBox(0, "Terminal Bye", "", win32con.MB_TOPMOST | win32con.MB_SYSTEMMODAL)
+        # win32api.MessageBox(0, "Terminal Bye", "", win32con.MB_TOPMOST | win32con.MB_SYSTEMMODAL)
 
     except Exception as e:
         logging.error(traceback.format_exc())
@@ -198,10 +199,12 @@ def main():
     log_file = os.path.join(get_executable_dir(), "debug.log")
     logging.basicConfig(level=logging.DEBUG, filename=log_file, filemode="a")
 
-    if len(sys.argv) > 1 and sys.argv[1] == "register":
+    if len(sys.argv) > 1 :
         import tie.register
-
-        tie.register.main()
+        if sys.argv[1] == "register":
+            tie.register.main(True)
+        elif sys.argv[1] == "unregister":
+            tie.register.main(False)
         exit()
 
     run()
