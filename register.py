@@ -2,6 +2,7 @@ import ctypes
 import os
 import subprocess
 import sys
+import traceback
 
 import winreg
 
@@ -46,18 +47,17 @@ def delete_sub_key(key0, current_key, arch_key=0):
 
 
 def main():
-    request_admin()
+    # request_admin()
     choice = None
     while choice not in ["Y", "N"]:
-        choice = input("Input Y for register, N for unregister,Q for exit.").strip().upper()
-        print(choice)
+        choice = input("Input Y for register, N for unregister, Q for exit.").strip().upper()
         if choice == "Q":
             exit()
 
     is_register = choice == "Y"
 
     try:
-        background_shell = r"Directory\Background\shell"
+        background_shell = r"Software\Classes\Directory\Background\shell"
         name = "Terminal In Explorer"
         if is_register:
             icon = "cmd.exe"
@@ -69,7 +69,7 @@ def main():
 
             print(command)
 
-            base_key = winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, background_shell)
+            base_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, background_shell)
             # base_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\*\shell") # file context menu
             app_key = winreg.CreateKey(base_key, name)
             winreg.SetValue(base_key, name, winreg.REG_SZ, name)
@@ -80,10 +80,11 @@ def main():
             winreg.CloseKey(base_key)
             print("register successful.")
         else:
-            delete_sub_key(winreg.HKEY_CLASSES_ROOT, background_shell + "\\" + name)
+            delete_sub_key(winreg.HKEY_CURRENT_USER, background_shell + "\\" + name)
             print("unregister successful.")
+
     except Exception as e:
-        print(e)
+        print(traceback.format_exc())
     os.system("pause")
 
 
