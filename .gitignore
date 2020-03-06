@@ -3,3 +3,5 @@
 .idea
 *.log
 *.lnk
+/test_code
+*.egg-info

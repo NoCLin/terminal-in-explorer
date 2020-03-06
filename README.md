@@ -1,5 +1,7 @@
 # Terminal in Explorer
 
+![](https://i.loli.net/2020/03/05/BN7KyOUjPZdHmWn.gif)
+
 Pin the terminal to the bottom of explorer.
 
 Sync path with explorer's address bar.
@@ -12,6 +14,10 @@ If you dont need the path synchronizing, you can use <https://github.com/jhasse/
 `python main.py register`
 
 Right click at your explorer's blank area, select `Terminal in Explorer` and enjoy it.
+
+---
+
+# Terminal in Explorer
 
 将终端吸附在资源管理器的底部，并将资源管理器的路径同步到终端。
 
