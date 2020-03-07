@@ -1,9 +1,12 @@
+import logging
 import os
 import sys
+import time
 
+import win32api
+import win32com
 import win32con
 import win32gui
-from win32com.client import Dispatch
 from win32com.client.gencache import EnsureDispatch
 
 
@@ -54,7 +57,55 @@ def get_children_recursively(hwnd, names):
 def get_explorer_address_by_hwnd(hwnd=None):
     for w in EnsureDispatch("Shell.Application").Windows():
         if hwnd is None or hwnd == w.HWnd:
-            if w.LocationURL in ["此电脑", "This PC"]:
-                return None
-            return w.LocationURL[8:]  # file:///
+            if w.LocationURL.startswith("file:///"):
+                return w.LocationURL[8:]  # file:///
+            # UNC 路径，如 file://Mac/.../...
+            if w.LocationURL.startswith("file://"):
+                return w.LocationURL[5:].replace("/", "\\")
+            logging.warning("unknown address: " + w.LocationURL)
     return None
+
+
+def type_string_to(hwnd, seq):
+    _last_c = None
+    for c in seq:
+        if _last_c == c:
+            time.sleep(0.1)
+        _last_c = c
+        if c == "\n":
+            win32api.SendMessage(hwnd, win32con.WM_CHAR, win32con.VK_RETURN, 0)
+        else:
+            win32api.SendMessage(hwnd, win32con.WM_CHAR, ord(c), 0)
+
+
+def type_ctrl_c_to(hwnd):
+    win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
+    win32api.SendMessage(hwnd, win32con.WM_KEYDOWN, ord('C'), 0)
+    win32api.SendMessage(hwnd, win32con.WM_KEYUP, ord('C'), 0)
+    win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
+
+
+def get_window_rect_and_size(hwnd):
+    (left, top, right, bottom) = win32gui.GetWindowRect(hwnd)
+    width = right - left
+    height = bottom - top
+    return left, top, right, bottom, width, height
+
+
+def window_reposition(hwnd):
+    tup = win32gui.GetWindowPlacement(hwnd)
+    if tup[1] == win32con.SW_SHOWMAXIMIZED:
+        # SetWindowPos不能处理最大化情况
+        win32gui.ShowWindow(hwnd, win32con.SW_NORMAL)
+        win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
+    elif tup[1] == win32con.SW_SHOWMINIMIZED:
+        logging.info("minimized")
+    elif tup[1] == win32con.SW_SHOWNORMAL:
+        left, top, right, bottom, width, height = get_window_rect_and_size(hwnd)
+        # 避免闪烁
+        win32gui.SetWindowPos(hwnd, win32con.HWND_TOP,
+                              left, top, width, height+1,
+                              win32con.SWP_SHOWWINDOW)
+        win32gui.SetWindowPos(hwnd, win32con.HWND_TOP,
+                              left, top, width, height,
+                              win32con.SWP_SHOWWINDOW)
