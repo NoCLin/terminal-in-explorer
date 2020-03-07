@@ -163,6 +163,12 @@ def run():
     while True:
         time.sleep(0.2)
 
+        # TODO: hook EVENT_SYSTEM_MOVESIZESTART
+        #  或 监听窗口为激活状态 才进入循环
+
+        if explorer_hwnd != win32gui.GetForegroundWindow():
+            continue
+
         try:
             cur_path = get_explorer_address()
         except:
@@ -177,8 +183,19 @@ def run():
         x, y, x1, y1 = explorer_cur_rect
         explorer_cur_size = x1 - x, y1 - y
 
-        if explorer_cur_size != explorer_last_size:
-            logging.info("explorer size changed")
+        # 位置/尺寸改变
+        if explorer_cur_rect != explorer_last_rect:
+            # 尺寸改变
+            if explorer_cur_size != explorer_last_size:
+                logging.info("explorer size changed")
+            else:
+                # TODO: 仅在从最小化中还原才重新定位
+                logging.info("explorer position changed")
+                window_reposition(explorer_hwnd)
+
+            if explorer_hwnd != win32gui.GetForegroundWindow():
+                continue
+
             update_terminal_position()
             explorer_last_size = explorer_cur_size
             explorer_last_rect = explorer_cur_rect
