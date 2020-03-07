@@ -58,7 +58,7 @@ def get_explorer_address_by_hwnd(hwnd=None):
     for w in EnsureDispatch("Shell.Application").Windows():
         if hwnd is None or hwnd == w.HWnd:
             if w.LocationURL.startswith("file:///"):
-                return w.LocationURL[8:]  # file:///
+                return w.LocationURL[8:].replace("/", "\\")
             # UNC 路径，如 file://Mac/.../...
             if w.LocationURL.startswith("file://"):
                 return w.LocationURL[5:].replace("/", "\\")
@@ -104,8 +104,42 @@ def window_reposition(hwnd):
         left, top, right, bottom, width, height = get_window_rect_and_size(hwnd)
         # 避免闪烁
         win32gui.SetWindowPos(hwnd, win32con.HWND_TOP,
-                              left, top, width, height+1,
+                              left, top, width, height + 1,
                               win32con.SWP_SHOWWINDOW)
         win32gui.SetWindowPos(hwnd, win32con.HWND_TOP,
                               left, top, width, height,
                               win32con.SWP_SHOWWINDOW)
+
+
+def translate_event_to_const(event_id):
+    for key in dir(win32con):
+        value = getattr(win32con, key, None)
+        if key.startswith("EVENT_SYSTEM_") and value == event_id:
+            return key
+    return None
+
+
+class LastValueContainer:
+    def __init__(self, init_value=None, update_func=None):
+        if init_value:
+            self.value = init_value
+
+        elif callable(update_func):
+            self.update_func = update_func
+            self.value = self.update_func()
+
+        self.last = self.value
+
+    def update(self):
+        self.put(self.update_func())
+
+    def changed(self):
+        return self.last != self.value
+
+    def get(self):
+        return self.value
+
+    def put(self, value):
+        if self.last != value:
+            self.last = self.value
+            self.value = value

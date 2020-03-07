@@ -11,7 +11,9 @@ from pywinauto.application import Application
 
 from tie.utils import get_executable_dir, \
     get_explorer_address_by_hwnd, is_terminal_idle, \
-    hide_titlebar_and_taskbar, type_string_to, type_ctrl_c_to, get_window_rect_and_size, window_reposition
+    hide_titlebar_and_taskbar, type_string_to, \
+    type_ctrl_c_to, get_window_rect_and_size, window_reposition, \
+    LastValueContainer
 
 
 class ExplorerGone(RuntimeError):
@@ -42,7 +44,7 @@ terminal_app = None
 
 def run():
     logging.debug("started")
-    global explorer_hwnd, terminal_app
+    global explorer_hwnd, terminal_app, terminal_hwnd
 
     explorer_hwnd = win32gui.GetForegroundWindow()
     logging.debug("explorer_hwnd: %d" % explorer_hwnd)
@@ -63,7 +65,7 @@ def run():
         if explorer_hwnd == 0:
             raise RuntimeError("Cannot find explorer.")
 
-    # 在explorerh中找容器，将终端嵌入容器 并重新设置原有控件大小
+    # 在explorer中找容器，将终端嵌入容器 并重新设置原有控件大小
     explorer_app = Application().connect(handle=explorer_hwnd)
 
     container = explorer_app.top_window()["ShellTabWindowClass"].child_window(class_name="DUIViewWndClassName",
@@ -105,12 +107,10 @@ def run():
     logging.info(win32gui.GetWindowText(terminal_hwnd))
 
     terminal_height = 300
-    # noinspection PyPep8Naming
-    sub_DirectUIHWND_hwnd = None
 
     # noinspection PyPep8Naming
     def update_sub_DirectUIHWND_position():
-        nonlocal sub_DirectUIHWND_hwnd, terminal_height
+        nonlocal terminal_height
         sub_DirectUIHWND_hwnd = container.child_window(class_name="DirectUIHWND", top_level_only=True,
                                                        found_index=1).handle
         (left, top, right, bottom, width, height) = get_window_rect_and_size(sub_DirectUIHWND_hwnd)
@@ -152,12 +152,18 @@ def run():
         else:
             logging.error("no such path: " + str(path))
 
-    last_path = get_explorer_address()
+    explorer_path = LastValueContainer(update_func=get_explorer_address)
+    explorer_rect = LastValueContainer(update_func=lambda: win32gui.GetWindowRect(explorer_hwnd))
 
-    explorer_last_rect = win32gui.GetWindowRect(explorer_hwnd)
-    x, y, x1, y1 = explorer_last_rect
-    explorer_last_size = x1 - x, y1 - y
+    def update_explorer_size():
+        x, y, x1, y1 = explorer_rect.get()
+        return x1 - x, y1 - y
+
+    explorer_size = LastValueContainer(update_func=lambda: update_explorer_size)
     update_terminal_position()
+
+    def refresh():
+        pass
 
     # TODO: non polling?
     while True:
@@ -168,9 +174,9 @@ def run():
 
         if explorer_hwnd != win32gui.GetForegroundWindow():
             continue
-
+        print("refresh...")
         try:
-            cur_path = get_explorer_address()
+            explorer_path.update()
         except:
             raise ExplorerGone
 
@@ -179,14 +185,13 @@ def run():
         except:
             raise TerminalGone
 
-        explorer_cur_rect = win32gui.GetWindowRect(explorer_hwnd)
-        x, y, x1, y1 = explorer_cur_rect
-        explorer_cur_size = x1 - x, y1 - y
+        explorer_rect.update()
+        explorer_size.update()
 
         # 位置/尺寸改变
-        if explorer_cur_rect != explorer_last_rect:
+        if explorer_rect.changed():
             # 尺寸改变
-            if explorer_cur_size != explorer_last_size:
+            if explorer_size.changed():
                 logging.info("explorer size changed")
             else:
                 # TODO: 仅在从最小化中还原才重新定位
@@ -197,16 +202,13 @@ def run():
                 continue
 
             update_terminal_position()
-            explorer_last_size = explorer_cur_size
-            explorer_last_rect = explorer_cur_rect
 
-        if cur_path != last_path:
-            logging.info("explorer address changed: " + str(cur_path))
-            update_terminal_cwd(cur_path)
+        if explorer_path.changed():
+            logging.info("explorer address changed: " + str(explorer_path.get()))
+            update_terminal_cwd(explorer_path.get())
 
             # 改变路径时，DirectUIHWND变了，重新改变大小
             update_sub_DirectUIHWND_position()
-            last_path = cur_path
 
 
 def main():
@@ -218,7 +220,6 @@ def main():
     logging.root.addHandler(handler)
 
     try:
-
         if len(sys.argv) > 1:
             import tie.register
             if sys.argv[1] == "register":
