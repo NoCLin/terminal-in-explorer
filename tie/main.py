@@ -13,7 +13,7 @@ from tie.utils import get_executable_dir, \
     get_explorer_address_by_hwnd, is_terminal_idle, \
     hide_titlebar_and_taskbar, type_string_to, \
     type_ctrl_c_to, get_window_rect_and_size, window_reposition, \
-    LastValueContainer
+    LastValueContainer, draw_text_to
 
 
 class ExplorerGone(RuntimeError):
@@ -159,6 +159,7 @@ def run():
                 type_string_to(terminal_hwnd, cd_command + "\n")
                 win32gui.SetForegroundWindow(explorer_hwnd)
             else:
+                draw_text_to(explorer_hwnd, "Terminal Busy.")
                 logging.warning("Terminal Busy.")
         else:
             logging.error("no such path: " + str(path))

@@ -105,6 +105,13 @@ def translate_event_to_const(event_id):
     return None
 
 
+def draw_text_to(hwnd, text):
+    dc = win32gui.CreateDC("DISPLAY", None, None, )
+    rect = win32gui.GetWindowRect(hwnd)
+    ret = win32gui.DrawText(dc, text, len(text), rect, win32con.DT_SINGLELINE)
+    win32gui.DeleteDC(dc)
+
+
 class LastValueContainer:
     def __init__(self, init_value=None, update_func=None, name="NoName"):
         self.name = name
