@@ -120,7 +120,8 @@ def translate_event_to_const(event_id):
 
 
 class LastValueContainer:
-    def __init__(self, init_value=None, update_func=None):
+    def __init__(self, init_value=None, update_func=None, name="NoName"):
+        self.name = name
         if init_value:
             self.value = init_value
 
@@ -129,17 +130,17 @@ class LastValueContainer:
             self.value = self.update_func()
 
         self.last = self.value
+        self.changed = False
 
     def update(self):
         self.put(self.update_func())
-
-    def changed(self):
-        return self.last != self.value
 
     def get(self):
         return self.value
 
     def put(self, value):
-        if self.last != value:
-            self.last = self.value
-            self.value = value
+        self.last = self.value
+        self.value = value
+        self.changed = self.last != self.value
+        if self.changed:
+            logging.debug("[%s] %s => %s" % (self.name, self.last, self.value))

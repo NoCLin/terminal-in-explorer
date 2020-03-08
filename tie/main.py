@@ -76,6 +76,9 @@ def run():
     DirectUIHWND_in_container_hwnd = container.child_window(class_name="DirectUIHWND", top_level_only=True,
                                                             found_index=0).handle
 
+    folder_tree_in_container_hwnd = container.child_window(class_name="SysTreeView32", top_level_only=False,
+                                                           ).handle
+
     # 里面还有一个 DirectUIHWND
 
     def get_explorer_address():
@@ -122,14 +125,23 @@ def run():
 
         # 执行前需要确保窗口resize过 否则 existed_widget 高度不能恢复，会越来越小
 
+        # 装入容器
         win32gui.SetParent(terminal_hwnd, container_hwnd)
 
+        # 改变容器中树状目录的高度
+        (left, top, right, bottom, width, height) = get_window_rect_and_size(folder_tree_in_container_hwnd)
+        new_container_h = height - terminal_height
+        win32gui.MoveWindow(folder_tree_in_container_hwnd, 0, 0, width, new_container_h, 1)
+
+        # 改变容器中的第一个 DirectUIHWND 的高度，给终端腾出位置
         (left, top, right, bottom, width, height) = get_window_rect_and_size(DirectUIHWND_in_container_hwnd)
         new_container_h = height - terminal_height
         win32gui.MoveWindow(DirectUIHWND_in_container_hwnd, 0, 0, width, new_container_h, 1)
+
+        # 移动 终端窗口 到刚刚腾出的位置
         win32gui.MoveWindow(terminal_hwnd, 0, new_container_h, width, terminal_height, 1)
 
-        # 窗口resize 和改变路径 时 改变 existed_sub_widget 的大小
+        # 改变容器中的第二个 DirectUIHWND 的宽度
         update_sub_DirectUIHWND_position()
 
     def update_terminal_cwd(path):
@@ -152,28 +164,22 @@ def run():
         else:
             logging.error("no such path: " + str(path))
 
-    explorer_path = LastValueContainer(update_func=get_explorer_address)
-    explorer_rect = LastValueContainer(update_func=lambda: win32gui.GetWindowRect(explorer_hwnd))
+    explorer_path = LastValueContainer(name="explorer_path", update_func=get_explorer_address)
+    # explorer_rect = LastValueContainer(name="explorer_rect", update_func=lambda: win32gui.GetWindowRect(explorer_hwnd))
+
+    explorer_replacement = LastValueContainer(name="explorer_replacement",
+                                              update_func=lambda: win32gui.GetWindowPlacement(explorer_hwnd)[1])
 
     def update_explorer_size():
-        x, y, x1, y1 = explorer_rect.get()
+        x, y, x1, y1 = win32gui.GetWindowRect(explorer_hwnd)
         return x1 - x, y1 - y
 
-    explorer_size = LastValueContainer(update_func=lambda: update_explorer_size)
+    explorer_size = LastValueContainer(name="explorer_size", update_func=update_explorer_size)
     update_terminal_position()
 
     def refresh():
-        pass
-
-    # TODO: non polling?
-    while True:
-        time.sleep(0.2)
-
-        # TODO: hook EVENT_SYSTEM_MOVESIZESTART
-        #  或 监听窗口为激活状态 才进入循环
-
         if explorer_hwnd != win32gui.GetForegroundWindow():
-            continue
+            return
         print("refresh...")
         try:
             explorer_path.update()
@@ -185,30 +191,37 @@ def run():
         except:
             raise TerminalGone
 
-        explorer_rect.update()
+        # explorer_rect.update()
         explorer_size.update()
 
-        # 位置/尺寸改变
-        if explorer_rect.changed():
-            # 尺寸改变
-            if explorer_size.changed():
-                logging.info("explorer size changed")
-            else:
-                # TODO: 仅在从最小化中还原才重新定位
-                logging.info("explorer position changed")
-                window_reposition(explorer_hwnd)
+        # TODO: 点击任务栏图标隐藏窗口，再次点击显示窗口 无法响应
 
-            if explorer_hwnd != win32gui.GetForegroundWindow():
-                continue
-
+        # 尺寸改变
+        if explorer_size.changed:
+            # 调用前 窗口需要重新绘制，不然高度越来越小
             update_terminal_position()
+            return
 
-        if explorer_path.changed():
-            logging.info("explorer address changed: " + str(explorer_path.get()))
+        # 仅在从最小化中还原才重新定位，避免闪烁
+        explorer_replacement.update()
+        if explorer_replacement.changed and explorer_replacement.last == win32con.SW_SHOWMINIMIZED:
+            window_reposition(explorer_hwnd)
+            update_terminal_position()
+            return
+
+        # if explorer_hwnd != win32gui.GetForegroundWindow():
+        #     return
+
+        if explorer_path.changed:
             update_terminal_cwd(explorer_path.get())
 
             # 改变路径时，DirectUIHWND变了，重新改变大小
             update_sub_DirectUIHWND_position()
+
+    # TODO: non polling hook EVENT_或 监听窗口为激活状态 才进入循环
+    while True:
+        time.sleep(0.2)
+        refresh()
 
 
 def main():
