@@ -93,22 +93,8 @@ def get_window_rect_and_size(hwnd):
 
 
 def window_reposition(hwnd):
-    tup = win32gui.GetWindowPlacement(hwnd)
-    if tup[1] == win32con.SW_SHOWMAXIMIZED:
-        # SetWindowPos不能处理最大化情况
-        win32gui.ShowWindow(hwnd, win32con.SW_NORMAL)
-        win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
-    elif tup[1] == win32con.SW_SHOWMINIMIZED:
-        logging.info("minimized")
-    elif tup[1] == win32con.SW_SHOWNORMAL:
-        left, top, right, bottom, width, height = get_window_rect_and_size(hwnd)
-        # 避免闪烁
-        win32gui.SetWindowPos(hwnd, win32con.HWND_TOP,
-                              left, top, width, height + 1,
-                              win32con.SWP_SHOWWINDOW)
-        win32gui.SetWindowPos(hwnd, win32con.HWND_TOP,
-                              left, top, width, height,
-                              win32con.SWP_SHOWWINDOW)
+    win32gui.ShowWindow(hwnd, win32con.SW_SHOWMINIMIZED)
+    win32gui.ShowWindow(hwnd, win32con.SW_SHOWNORMAL)
 
 
 def translate_event_to_const(event_id):
