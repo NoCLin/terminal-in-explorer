@@ -2,6 +2,8 @@ import logging
 import os
 import sys
 import time
+from threading import Timer
+from urllib.parse import unquote
 
 import win32api
 import win32com
@@ -14,6 +16,28 @@ def get_executable_dir():
     if getattr(sys, 'frozen', False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(__file__)
+
+
+def debounce(wait):
+    """ Decorator that will postpone a functions
+        execution until after wait seconds
+        have elapsed since the last time it was invoked. """
+
+    def decorator(fn):
+        def debounced(*args, **kwargs):
+            def call_it():
+                fn(*args, **kwargs)
+
+            try:
+                debounced.t.cancel()
+            except(AttributeError):
+                pass
+            debounced.t = Timer(wait, call_it)
+            debounced.t.start()
+
+        return debounced
+
+    return decorator
 
 
 def is_terminal_idle(pid):
@@ -57,22 +81,30 @@ def get_children_recursively(hwnd, names):
 def get_explorer_address_by_hwnd(hwnd=None):
     for w in EnsureDispatch("Shell.Application").Windows():
         if hwnd is None or hwnd == w.HWnd:
+            address = w.LocationURL
+
             if w.LocationURL.startswith("file:///"):
-                return w.LocationURL[8:].replace("/", "\\")
+                address = w.LocationURL[8:]
             # UNC 路径，如 file://Mac/.../...
-            if w.LocationURL.startswith("file://"):
-                return w.LocationURL[5:].replace("/", "\\")
-            logging.warning("unknown address: " + w.LocationURL)
+            elif w.LocationURL.startswith("file://"):
+                address = w.LocationURL[5:]
+            address = address.replace("/", "\\")
+            address = unquote(address)
+            if os.path.isdir(address):
+                return address
+            else:
+                logging.warning("unknown address: " + w.LocationURL)
+                return None
     return None
 
 
 def type_string_to(hwnd, seq):
-    _last_c = None
-    for c in seq:
-        if _last_c == c:
+    for i in range(len(seq)):
+        c = seq[i]
+        if i > 0 and c == seq[i - 1]:
             time.sleep(0.1)
-        _last_c = c
         if c == "\n":
+            # cmd 有效，powershell变成^M
             win32api.SendMessage(hwnd, win32con.WM_CHAR, win32con.VK_RETURN, 0)
         else:
             win32api.SendMessage(hwnd, win32con.WM_CHAR, ord(c), 0)
@@ -92,15 +124,10 @@ def get_window_rect_and_size(hwnd):
     return left, top, right, bottom, width, height
 
 
-def window_reposition(hwnd):
-    win32gui.ShowWindow(hwnd, win32con.SW_SHOWMINIMIZED)
-    win32gui.ShowWindow(hwnd, win32con.SW_SHOWNORMAL)
-
-
-def translate_event_to_const(event_id):
+def translate_event_const(event_id, prefix):
     for key in dir(win32con):
         value = getattr(win32con, key, None)
-        if key.startswith("EVENT_SYSTEM_") and value == event_id:
+        if key.startswith(prefix) and value == event_id:
             return key
     return None
 
@@ -110,6 +137,14 @@ def draw_text_to(hwnd, text):
     rect = win32gui.GetWindowRect(hwnd)
     ret = win32gui.DrawText(dc, text, len(text), rect, win32con.DT_SINGLELINE)
     win32gui.DeleteDC(dc)
+
+
+def set_dpi_awareness():
+    import ctypes
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(True)
+    except:
+        pass
 
 
 class LastValueContainer:

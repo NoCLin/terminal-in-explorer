@@ -1,28 +1,33 @@
+import json
 import logging
 import os
 import sys
+import threading
 import time
 import traceback
-
+import signal
+import pywintypes
 import win32api
 import win32con
+import win32event
 import win32gui
+import ctypes
 from pywinauto.application import Application
+from win32con import *
 
+from tie.hook import start_win_hook, keyboard_hook_thread
 from tie.utils import get_executable_dir, \
     get_explorer_address_by_hwnd, is_terminal_idle, \
     hide_titlebar_and_taskbar, type_string_to, \
-    type_ctrl_c_to, get_window_rect_and_size, window_reposition, \
-    LastValueContainer, draw_text_to
+    type_ctrl_c_to, get_window_rect_and_size, \
+    LastValueContainer, draw_text_to, translate_event_const, \
+    debounce, set_transparent, set_dpi_awareness
 
+set_dpi_awareness()
 
-class ExplorerGone(RuntimeError):
-    pass
+main_thread_id = win32api.GetCurrentThreadId()
 
-
-class TerminalGone(RuntimeError):
-    pass
-
+kernel32 = ctypes.WinDLL("kernel32")
 
 terminal_config = {
     "cmd": {
@@ -38,56 +43,179 @@ terminal_config = {
 terminal_height = 300
 
 TERMINAL_TYPE = "cmd"
+# TERMINAL_TYPE = "powershell"
+# powershell 还需适配 cd
+
 current_terminal_config = terminal_config.get(TERMINAL_TYPE)
 
 explorer_hwnd = None
+explorer_path = LastValueContainer(name="explorer_path",
+                                   update_func=lambda: get_explorer_address_by_hwnd(explorer_hwnd))
 terminal_app = None
+terminal_hwnd = None
+container_hwnd = None
+should_terminal_hide = False
+
+
+def update_terminal_position():
+    global explorer_hwnd, terminal_height, terminal_hwnd, should_terminal_hide
+    sw = win32gui.GetWindowPlacement(explorer_hwnd)[1]
+
+    if should_terminal_hide:
+        win32gui.SetWindowPos(terminal_hwnd, win32con.HWND_NOTOPMOST,
+                              0, 0, 0, 0,
+                              win32con.SWP_HIDEWINDOW)
+        return
+
+    if sw == win32con.SW_SHOWMAXIMIZED:
+        logging.debug("最大化")
+        # TODO: 多显示器适配
+        # https://stackoverflow.com/questions/3129322/how-do-i-get-monitor-resolution-in-python
+
+        # SM_CXSCREEN SM_CYSCREEN size of screen in pixels including size of taskbar
+        # SM_CXFULLSCREEN SM_CYFULLSCREEN size of screen in pixels excluding size of taskbar
+
+        # print("检测到最大化窗口", (left, top, right, bottom, width, height))
+
+        # 防止explorer 的border 导致计算错误，我的环境(-13,-13)
+        win32gui.SetWindowPos(terminal_hwnd, win32con.HWND_TOP,
+                              0, win32api.GetSystemMetrics(SM_CYFULLSCREEN) - terminal_height,
+                              win32api.GetSystemMetrics(SM_CXFULLSCREEN), terminal_height,
+                              win32con.SWP_SHOWWINDOW)
+
+    elif sw == win32con.SW_NORMAL:
+
+        (left, top, right, bottom, width, height) = get_window_rect_and_size(explorer_hwnd)
+        h_overflow = height + terminal_height - win32api.GetSystemMetrics(SM_CYFULLSCREEN)
+        if h_overflow >= 30:
+            win32gui.SetWindowPos(explorer_hwnd, win32con.HWND_TOP,
+                                  0, 0, width, height - h_overflow,
+                                  win32con.SWP_NOMOVE)
+            logging.debug("窗口高度溢出 %d" % h_overflow)
+            (left, top, right, bottom, width, height) = get_window_rect_and_size(explorer_hwnd)
+
+        win32gui.SetWindowPos(terminal_hwnd, win32con.HWND_TOPMOST,
+                              left, bottom, width, terminal_height,
+                              SWP_SHOWWINDOW)
+
+        win32gui.SetWindowPos(explorer_hwnd, win32con.HWND_TOP,
+                              0, 0, 0, 0,
+                              SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+
+    else:
+        pass
+
+
+def win_hook_callback(hWinEventHook, event, hwnd, idObject, idChild, dwEventThread, dwmsEventTime):
+    if hwnd not in (explorer_hwnd, terminal_hwnd) and \
+            event == EVENT_SYSTEM_FOREGROUND:
+        logging.debug("explorer丢失前台")
+        win32gui.SetWindowPos(terminal_hwnd, win32con.HWND_NOTOPMOST,
+                              0, 0, 0, 0,
+                              win32con.SWP_HIDEWINDOW)
+        return
+
+    if hwnd == explorer_hwnd:
+
+        # FIXME: （Aero Shake）按住标题栏晃动会只显示当前窗口，terminal 也无法显示
+
+        if event == EVENT_SYSTEM_FOREGROUND:
+            if win32gui.GetForegroundWindow() == explorer_hwnd:
+                print("explorer置前台")
+                update_terminal_position()
+
+            pass
+        elif event == EVENT_SYSTEM_MOVESIZEEND:
+            # The movement or resizing of a window has finished. This event is sent by the system, never by servers.
+            logging.debug("窗口移动结束")
+            update_terminal_position()
+        elif event == EVENT_OBJECT_LOCATIONCHANGE:
+            # An object has changed location, shape, or size.
+            # print("EVENT_OBJECT_LOCATIONCHANGE")
+            update_terminal_position()
+        else:
+            pass
+            # print("UNKNOWN", translate_event_const(event, "EVENT_"), event)
+
+
+def monitor_explorer_address():
+    global explorer_hwnd, terminal_app, terminal_hwnd, current_terminal_config
+    try:
+        while True:
+            time.sleep(0.5)
+
+            if not win32gui.IsWindow(terminal_hwnd):
+                logging.debug("Terminal Gone")
+                win32api.PostThreadMessage(main_thread_id, win32con.WM_QUIT, 0, 0)
+                break
+            if not win32gui.IsWindow(explorer_hwnd):
+                terminal_app.kill()
+                win32api.PostThreadMessage(main_thread_id, win32con.WM_QUIT, 0, 0)
+                break
+
+            if win32gui.GetForegroundWindow() not in (explorer_hwnd, terminal_hwnd):
+                continue
+
+            explorer_path.update()
+            if explorer_path.changed:
+                logging.info("改变路径")
+                if explorer_path.value:
+
+                    # DONE: check for terminal IDLE
+                    if is_terminal_idle(terminal_app.process):
+                        cd_command = current_terminal_config["cd"] + ' "%s"' % explorer_path.value
+                        logging.debug("CD command: " + cd_command)
+
+                        # FIXED: 需要Ctrl+C中断当前输入
+                        global TERMINAL_TYPE
+                        if TERMINAL_TYPE == "cmd":
+                            type_ctrl_c_to(terminal_hwnd)
+                            type_ctrl_c_to(terminal_hwnd)
+                            type_string_to(terminal_hwnd, cd_command)
+                            type_string_to(terminal_hwnd, "\n")
+                        elif TERMINAL_TYPE == "powershell":
+                            # FIXME: type_keys 可能涉及转义字符，需要先处理
+                            #   并且会导致窗口失去焦点，导致无法连续使用键盘
+                            terminal_app.top_window().type_keys('^c', pause=0)
+                            terminal_app.top_window().type_keys('^c', pause=0)
+                            terminal_app.top_window().type_keys(
+                                '%s{ENTER}' % cd_command, pause=0, with_spaces=True)
+
+                        win32gui.SetForegroundWindow(explorer_hwnd)
+                    else:
+                        draw_text_to(explorer_hwnd, "Terminal Busy.")
+                        logging.warning("Terminal Busy.")
+                else:
+                    logging.error("no such path: " + str(explorer_path.value))
+    except Exception as e:
+        logging.error(e)
+        logging.error(traceback.format_exc())
 
 
 def run():
     logging.debug("started")
+
+    sz_mutex = "TerminalInExplorer"
+    ERROR_ALREADY_EXISTS = 183
+    mutex = win32event.CreateMutex(None, pywintypes.FALSE, sz_mutex)
+    if win32api.GetLastError() == ERROR_ALREADY_EXISTS:
+        raise RuntimeError("Only one instance is allowed.")
+
     global explorer_hwnd, terminal_app, terminal_hwnd, terminal_height
-    global container_hwnd, DirectUIHWND_in_container_hwnd
-    explorer_hwnd = win32gui.GetForegroundWindow()
+    # Should be last activated explorer window
+    explorer_hwnd = win32gui.FindWindow("CabinetWClass", None)
     logging.debug("explorer_hwnd: %d" % explorer_hwnd)
-    logging.debug("explorer_title: %s" % win32gui.GetWindowText(explorer_hwnd))
+    logging.debug("title: %s" % win32gui.GetWindowText(explorer_hwnd))
+    if explorer_hwnd == 0:
+        raise RuntimeError("Cannot find explorer.")
 
-    # TODO: 本程序窗口作为cmd窗口?避免再开一个窗口？
-    #  (virtualenv pythonw？)
-
-    class_name = win32gui.GetClassName(explorer_hwnd)
-    logging.debug("explorer_classname: %s" % class_name)
-
-    if class_name != "CabinetWClass":
-
-        # Should be last activated explorer window
-        explorer_hwnd = win32gui.FindWindow("CabinetWClass", None)
-        logging.debug("FindWindow: %s" % explorer_hwnd)
-        logging.debug("title: %s" % win32gui.GetWindowText(explorer_hwnd))
-        if explorer_hwnd == 0:
-            raise RuntimeError("Cannot find explorer.")
-
-    # 在explorer中找容器，将终端嵌入容器 并重新设置原有控件大小
-    explorer_app = Application().connect(handle=explorer_hwnd)
-
-    container = explorer_app.top_window()["ShellTabWindowClass"].child_window(class_name="DUIViewWndClassName",
-                                                                              top_level_only=True)
-    container_hwnd = container.handle
-
-    # noinspection PyPep8Naming
-    DirectUIHWND_in_container_hwnd = container.child_window(class_name="DirectUIHWND", top_level_only=True,
-                                                            found_index=0).handle
-
-    folder_tree_in_container_hwnd = container.child_window(class_name="SysTreeView32", top_level_only=False,
-                                                           ).handle
-
-    # 里面还有一个 DirectUIHWND
-
-    def get_explorer_address():
-        return get_explorer_address_by_hwnd(explorer_hwnd)
+    # 只能启动一次
+    # 一个实例 附加到所有的explorer
+    # 切换时自动识别路径 如果idle且路径不一致 就切换
 
     # FIXED: work_dir 导致启动失败
-    work_dir = get_explorer_address()
+    explorer_path.update()
+    work_dir = explorer_path.value
     work_dir = work_dir if work_dir else "C:\\"
     # DONE: 设置起始路径
     logging.debug("create new terminal %s at %s" % (current_terminal_config["start"],
@@ -98,145 +226,41 @@ def run():
                                        create_new_console=True, wait_for_idle=False)
 
     # wait shell
-    terminal_app["ConsoleWindowClass"].wait("exists")
-
-    terminal_hwnd = terminal_app.top_window().handle
+    terminal_hwnd = terminal_app.top_window().wait("exists").handle
     # avoid flash
     win32gui.SetWindowPos(terminal_hwnd, win32con.HWND_TOP,
                           0, 0, 0, 0,
                           win32con.SWP_SHOWWINDOW)
 
     hide_titlebar_and_taskbar(terminal_hwnd)
+    set_transparent(terminal_hwnd, 200)
 
     logging.info(terminal_hwnd)
     logging.info(win32gui.GetWindowText(terminal_hwnd))
 
-    # noinspection PyPep8Naming
-    def update_sub_DirectUIHWND_position():
-        global terminal_height
-        sub_DirectUIHWND_hwnd = container.child_window(class_name="DirectUIHWND", top_level_only=True,
-                                                       found_index=1).handle
-        (left, top, right, bottom, width, height) = get_window_rect_and_size(sub_DirectUIHWND_hwnd)
-        new_container_h = height - terminal_height
-        win32gui.MoveWindow(sub_DirectUIHWND_hwnd, 0, 0, width, new_container_h, 1)
-
-    def update_terminal_position():
-        global container_hwnd, DirectUIHWND_in_container_hwnd, terminal_height
-        # 执行前需要确保窗口resize过 否则 existed_widget 高度不能恢复，会越来越小
-
-        # 装入容器
-        win32gui.SetParent(terminal_hwnd, container_hwnd)
-
-        # 改变容器中树状目录的高度
-        (left, top, right, bottom, width, height) = get_window_rect_and_size(folder_tree_in_container_hwnd)
-        new_container_h = height - terminal_height
-        win32gui.MoveWindow(folder_tree_in_container_hwnd, 0, 0, width, new_container_h, 1)
-
-        # 改变容器中的第一个 DirectUIHWND 的高度，给终端腾出位置
-        (left, top, right, bottom, width, height) = get_window_rect_and_size(DirectUIHWND_in_container_hwnd)
-        new_container_h = height - terminal_height
-        win32gui.MoveWindow(DirectUIHWND_in_container_hwnd, 0, 0, width, new_container_h, 1)
-
-        # 移动 终端窗口 到刚刚腾出的位置
-        win32gui.MoveWindow(terminal_hwnd, 0, new_container_h, width, terminal_height, 1)
-
-        # 改变容器中的第二个 DirectUIHWND 的宽度
-        update_sub_DirectUIHWND_position()
-
-    def update_terminal_cwd(path):
-        if path:
-
-            # DONE: check for terminal IDLE
-            if is_terminal_idle(terminal_app.process):
-                cd_command = current_terminal_config["cd"] + ' "%s"' % path
-                logging.debug("CD command: " + cd_command)
-
-                # FIXED: 需要中断当前输入
-                # NOTE: SetParent后 pywinauto无法操作Terminal了
-
-                type_ctrl_c_to(terminal_hwnd)
-                type_ctrl_c_to(terminal_hwnd)
-                type_string_to(terminal_hwnd, cd_command + "\n")
-                win32gui.SetForegroundWindow(explorer_hwnd)
-            else:
-                draw_text_to(explorer_hwnd, "Terminal Busy.")
-                logging.warning("Terminal Busy.")
-        else:
-            logging.error("no such path: " + str(path))
-
-    explorer_path = LastValueContainer(name="explorer_path", update_func=get_explorer_address)
-    # explorer_rect = LastValueContainer(name="explorer_rect", update_func=lambda: win32gui.GetWindowRect(explorer_hwnd))
-
-    explorer_replacement = LastValueContainer(name="explorer_replacement",
-                                              update_func=lambda: win32gui.GetWindowPlacement(explorer_hwnd)[1])
-
-    def update_explorer_size():
-        x, y, x1, y1 = win32gui.GetWindowRect(explorer_hwnd)
-        return x1 - x, y1 - y
-
-    explorer_size = LastValueContainer(name="explorer_size", update_func=update_explorer_size)
-    fore_hwnd = LastValueContainer(name="fore hwnd", update_func=win32gui.GetForegroundWindow)
+    # FIXME: 有的时候从非explorer启动 terminal不显示
+    # 也许是万恶之源...
     update_terminal_position()
+    update_terminal_position()
+    win32gui.SetForegroundWindow(explorer_hwnd)
+    win32gui.SetWindowPos(explorer_hwnd, win32con.HWND_TOP,
+                          0, 0, 0, 0,
+                          win32con.SWP_SHOWWINDOW | SWP_NOMOVE | SWP_NOSIZE)
+    win32gui.SetWindowPos(terminal_hwnd, win32con.HWND_TOP,
+                          0, 0, 0, 0,
+                          win32con.SWP_SHOWWINDOW | SWP_NOMOVE | SWP_NOSIZE)
 
-    # 策略
-    # 只移动窗口 不更新
-    # 改变大小 更新
-    # 从最小化恢复 更新
-    def refresh():
+    threading.Thread(target=monitor_explorer_address, daemon=True).start()
 
-        try:
-            win32gui.GetWindowRect(terminal_hwnd)
-        except:
-            raise TerminalGone
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
 
-        try:
-            fore_hwnd.update()
-            explorer_size.update()
-            explorer_replacement.update()
-            explorer_path.update()
+    def cb():
+        global should_terminal_hide
+        should_terminal_hide = not should_terminal_hide
+        update_terminal_position()
 
-            # FIXME (低优先级): 快速点击任务栏图标 会导致响应不及时，以下代码能解决大部分
-            # 除非手特别快
-            if explorer_replacement.changed and explorer_replacement.last == win32con.SW_SHOWMINIMIZED:
-                logging.info("从最小化恢复")
-                window_reposition(container_hwnd)
-                update_terminal_position()
-                return
-
-            if fore_hwnd.value != explorer_hwnd:
-                return
-
-        except:
-            raise ExplorerGone
-
-        # 尺寸改变
-        if explorer_size.changed:
-            # 如果是最小化则不需要更新终端
-            # 实际上最小化了，fore不是explorer，不会执行到这里
-            if win32gui.GetWindowPlacement(explorer_hwnd)[1] == win32con.SW_SHOWMINIMIZED:
-                logging.info("最小化")
-            else:
-                logging.info("改变窗口大小")
-                # 调用前 需要确保窗口已经重新绘制，不然高度越来越小
-                window_reposition(container_hwnd)
-                update_terminal_position()
-            return
-
-        if win32gui.GetForegroundWindow() != explorer_hwnd:
-            return
-
-        if explorer_path.changed:
-            logging.info("改变路径")
-            update_terminal_cwd(explorer_path.get())
-
-            # 改变路径时，DirectUIHWND变了，重新改变大小
-            update_sub_DirectUIHWND_position()
-            return
-
-    # TODO: non polling hook EVENT_或 监听窗口为激活状态 才进入循环
-    while True:
-        time.sleep(0.2)
-        refresh()
+    threading.Thread(target=keyboard_hook_thread, args=(cb,), daemon=True).start()
+    start_win_hook(callback=win_hook_callback)
 
 
 def main():
@@ -247,34 +271,27 @@ def main():
     handler.setFormatter(logging.Formatter(fmt))
     logging.root.addHandler(handler)
 
+    if len(sys.argv) > 1:
+        import tie.register
+
+        if sys.argv[1] == "register":
+            tie.register.main(True)
+        elif sys.argv[1] == "unregister":
+            tie.register.main(False)
+        exit()
+
     try:
-        if len(sys.argv) > 1:
-            import tie.register
-            if sys.argv[1] == "register":
-                tie.register.main(True)
-            elif sys.argv[1] == "unregister":
-                tie.register.main(False)
-            exit()
-
         run()
-
-    except ExplorerGone:
-        logging.info("Explorer Gone")
-    except TerminalGone:
-        logging.info("Terminal Gone")
-        # 终端挂了 恢复explorer位置(可能此时explorer也挂了
-        try:
-            window_reposition(container_hwnd)
-            # win32api.MessageBox(0, "Terminal Bye", "", win32con.MB_TOPMOST | win32con.MB_SYSTEMMODAL)
-        except:
-            pass
     except Exception as e:
         logging.error(traceback.format_exc())
         win32api.MessageBox(0, traceback.format_exc(), "Error",
                             win32con.MB_TOPMOST | win32con.MB_SYSTEMMODAL | win32con.MB_ICONSTOP)
     finally:
         # DONE: 窗口关闭一并关闭shell
-        terminal_app.kill()
+        try:
+            terminal_app.kill()
+        except:
+            pass
 
 
 if __name__ == "__main__":
