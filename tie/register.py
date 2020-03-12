@@ -58,6 +58,7 @@ def main(is_register):
         is_register = choice == "Y"
 
     try:
+        background = r"Software\Classes\Directory\Background"
         background_shell = r"Software\Classes\Directory\Background\shell"
         name = "Terminal In Explorer"
         if is_register:
@@ -69,8 +70,13 @@ def main(is_register):
                     os.path.join(os.path.dirname(__file__), "main.py"))
 
             print(command)
+            # FIXED: 有的用户可能没有 background_shell
 
-            base_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, background_shell)
+            try:
+                base_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, background_shell)
+            except:
+                bg = winreg.OpenKey(winreg.HKEY_CURRENT_USER, background)
+                base_key = winreg.CreateKey(bg, "shell")
             # base_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\*\shell") # file context menu
             app_key = winreg.CreateKey(base_key, name)
             winreg.SetValue(base_key, name, winreg.REG_SZ, name)
