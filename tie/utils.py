@@ -5,6 +5,7 @@ import time
 from threading import Timer
 from urllib.parse import unquote
 
+import pythoncom
 import win32api
 import win32com
 import win32con
@@ -40,14 +41,32 @@ def debounce(wait):
     return decorator
 
 
-def is_terminal_idle(pid):
-    wmi = win32com.client.GetObject('winmgmts:')
-    children = wmi.ExecQuery('Select * from win32_process where ParentProcessId=%s' % pid)
-    for child in children:
-        print('child process of terminal\t', child.Name, child.Properties_('ProcessId'))
 
-    # NOTE: terminal has one children named 'conhost.exe'
-    return len([1 for child in children if child.Name != "conhost.exe"]) == 0
+def get_child_processes(pid, recursively=True):
+    try:
+
+        pythoncom.CoInitialize()
+        wmi = win32com.client.GetObject('winmgmts:')
+
+        def get_child(_pid):
+            children = wmi.ExecQuery('Select * from win32_process where ParentProcessId=%s' % _pid)
+            return [
+                (child.Name,
+                 int(child.Properties_('ProcessId')),
+                 get_child(int(child.Properties_('ProcessId')))) if recursively else None
+                for child in children]
+
+        return get_child(pid)
+
+    finally:
+        pythoncom.CoUninitialize()
+
+
+def is_terminal_idle(pid):
+    r = get_child_processes(pid)
+    root_name, root_pid, root_children = r[0]
+    user_execute_process = [i[2] for i in root_children if len(i[2]) > 0]
+    return len(user_execute_process) == 0
 
 
 def hide_titlebar_and_taskbar(hwnd):
@@ -79,23 +98,26 @@ def get_children_recursively(hwnd, names):
 
 
 def get_explorer_address_by_hwnd(hwnd=None):
-    for w in EnsureDispatch("Shell.Application").Windows():
-        if hwnd is None or hwnd == w.HWnd:
-            address = w.LocationURL
-
-            if w.LocationURL.startswith("file:///"):
-                address = w.LocationURL[8:]
-            # UNC 路径，如 file://Mac/.../...
-            elif w.LocationURL.startswith("file://"):
-                address = w.LocationURL[5:]
-            address = address.replace("/", "\\")
-            address = unquote(address)
-            if os.path.isdir(address):
-                return address
-            else:
-                logging.warning("unknown address: " + w.LocationURL)
-                return None
-    return None
+    try:
+        pythoncom.CoInitialize()
+        for w in EnsureDispatch("Shell.Application").Windows():
+            if hwnd is None or hwnd == w.HWnd:
+                address = w.LocationURL
+                if w.LocationURL.startswith("file:///"):
+                    address = w.LocationURL[8:]
+                # UNC 路径，如 file://Mac/.../...
+                elif w.LocationURL.startswith("file://"):
+                    address = w.LocationURL[5:]
+                address = address.replace("/", "\\")
+                address = unquote(address)
+                if os.path.isdir(address):
+                    return address
+                else:
+                    logging.warning("unknown address: " + w.LocationURL)
+                    return None
+        return None
+    finally:
+        pythoncom.CoUninitialize()
 
 
 def type_string_to(hwnd, seq):

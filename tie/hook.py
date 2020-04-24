@@ -52,9 +52,12 @@ def keyboard_hook_thread(double_ctrl_callback):
         if args.event_type == 'key down':
             if 'Lcontrol' in args.pressed_key:
                 now_time = ms()
-                if now_time - last_emit_time < INTERVAL:
+                is_db_click = now_time - last_emit_time < INTERVAL
+                if is_db_click:
                     double_ctrl_callback()
-                last_emit_time = ms()
+                    last_emit_time = ms() - INTERVAL
+                else:
+                    last_emit_time = ms()
             else:
                 pass
 

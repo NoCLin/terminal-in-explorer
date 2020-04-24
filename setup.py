@@ -17,7 +17,7 @@ setup(name="TerminalInExplorer",
       license="MIT Licence",
       install_requires=[
           'pywin32==227',
-          'pywinauto==0.6.8',
+          'PyQt5==5.13.0',
       ],
       packages=find_packages(),
       zip_safe=False,
@@ -32,7 +32,7 @@ setup(name="TerminalInExplorer",
       },
       entry_points={
           'console_scripts': [
-              'tie = tie.main:main',
+              'tie = tie.__main__:main',
           ]
       },
       )
