@@ -16,7 +16,7 @@ setup(name="TerminalInExplorer",
       url="https://github.com/NoCLin/terminal-in-explorer",
       license="MIT Licence",
       install_requires=[
-          'pywin32==227',
+          'pywin32==301',
           'PyQt5==5.13.0',
       ],
       packages=find_packages(),
